@@ -1,6 +1,7 @@
 param (
     [int]$NumberOfDesktops,
     [string]$OpenOnAll,
+    [string[]]$OpenFiles = @(),
     [string[]]$OpenURLs = @()
 )
 
@@ -11,17 +12,19 @@ function Show-Help {
     Write-Host "Parameters:"
     Write-Host "  -NumberOfDesktops <int>   Number of virtual desktops to create (required, between 1 and 8)."
     Write-Host "  -OpenOnAll <path>         Path to an executable to open on each desktop (optional)."
-    Write-Host "  -OpenURLs <url>           List of URLs to open on each desktop (optional, https:// required, does not need to match number of desktops)."
+    Write-Host "  -OpenFiles <path(s)>      List of file path(s) to open on each desktop (optional, must be less than or equal to requested desktops)."
+    Write-Host "  -OpenURLs <url(s)>        List of URL(s) to open on each desktop (optional, https:// required, must be less than or equal to requested desktops)."
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\open-screens.ps1 -NumberOfDesktops 3 -OpenOnAll 'C:\Windows\System32\notepad.exe' -OpenURLs 'https://example.com', 'https://anotherexample.com'"
+    Write-Host "  .\open-screens.ps1 -NumberOfDesktops 2 -OpenFiles 'C:\word.docx', 'C:\slides.pptx' -OpenURLs 'https://example.com'"
     Write-Host "  .\open-screens.ps1 -NumberOfDesktops 2 -OpenURLs 'https://example.com'"
     Write-Host ""
     exit
 }
 
 # Show help if no parameters are provided
-if ($PSCmdlet.MyInvocation.BoundParameters.Count -eq 0) {
+if ($NumberOfDesktops -eq 0) {
     Show-Help
 }
 
@@ -31,7 +34,7 @@ function Validate-URLs {
     )
 
     foreach ($URL in $URLs) {
-        if ($URL -notmatch "^https://") {
+        if ($URL -notmatch "^http[s]{0,}://") {
             Write-Host "Invalid URL (must start with https://): $URL" -ForegroundColor Red
             exit 1
         }
@@ -56,6 +59,21 @@ function Validate-ExecutablePath {
     }
 }
 
+function Validate-Files {
+    param (
+        [string[]]$Files
+    )
+
+    foreach ($File in $Files) {
+        if (-not (Test-Path $File)) {
+            Write-Host "Invalid File Path for File $FILE." -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+
+
 function Validate-NumberOfDesktops {
     param (
         [int]$Number
@@ -77,6 +95,7 @@ if ($NumberOfDesktops -ne $null) {
 
 Validate-URLs -URLs $OpenURLs
 Validate-ExecutablePath -Path $OpenOnAll
+Validate-Files -Files $OpenFiles
 
 # Send a keyboard shortcut to create a new virtual desktop (Windows key + Ctrl + D)
 Add-Type -TypeDefinition @"
@@ -115,7 +134,7 @@ function Create-NewDesktop {
     [KeyboardSimulator]::SendKey($VK_LWIN, 0x0002)
 
     # Wait for the new desktop to be created
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 4
 }
 
 function Switch-ToDesktop {
@@ -149,8 +168,41 @@ function Open-Executable {
         return
     }
 
-    Start-Process $ExecutablePath
+    $process = Start-Process $ExecutablePath -PassThru
+
+    # Wait for the process to start
+    if ($process) {
+        Write-Host "Waiting for the process to start: $($process.Id)" -ForegroundColor Green
+        try {
+            # Wait for the process to start or timeout after 10 seconds
+            $process | Wait-Process -Timeout 10
+        } catch {
+            Write-Host "Failed to wait for process to start: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    } else {
+        Write-Host "Failed to start the process: $ExecutablePath" -ForegroundColor Red
+    }
 }
+
+function Open-File {
+    param (
+        [string]$File
+    )
+
+    $process = Start-Process $File
+    
+    # Wait for the file to open
+    if ($process) {
+        Write-Host "Waiting for $File to open." -ForegroundColor Green
+        try {
+            # Wait for the file to open or timeout after 10 seconds.
+            $process | Wait-Process -Timeout 20
+        } catch {
+            Write-Host "Failed to wait for file to open: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+}
+
 
 function Open-URL {
     param (
@@ -175,13 +227,20 @@ for ($i = 1; $i -le $NumberOfDesktops; $i++) {
     if ($OpenURLs.Count -ge $i) {
         $currentURL = $OpenURLs[$i - 1]
         Open-URL -URL $currentURL
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 5
     }
 
-    # 3. Open the executable on the current desktop if specified.
+    # 3. Open the next File from the OpenFiles array if any remain.
+    if ($OpenFiles.Count -ge $i) {
+        $currentFile = $OpenFiles[$i - 1]
+        Open-File -File $currentFile
+        Start-Sleep -Seconds 5
+    }
+
+    # 4. Open the executable on the current desktop if specified.
     if ($OpenOnAll) {
         Open-Executable -ExecutablePath $OpenOnAll
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 5
     }
 }
 
